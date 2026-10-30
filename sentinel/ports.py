@@ -8,10 +8,10 @@ only hosts the operator passes on the command line are touched.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
-import xml.etree.ElementTree as ET
 from typing import List, Tuple
 
 from .models import Finding
@@ -43,51 +43,50 @@ SENSITIVE = {
 }
 
 
+# سطور التقرير النصي لنmap: عنوان الهدف ثم صف المنفذ
+_REPORT_LINE = re.compile(r"^Nmap scan report for\s+(.+?)\s*\([^)]*\)\s*$")
+_PORT_LINE = re.compile(r"^(\d{1,5})/(tcp|udp)\s+(open)\s+(\S+)\s*(.*)$")
+
+
 def _run_nmap(host: str, timeout: int = 420) -> Tuple[List[Finding], str]:
     binary = shutil.which("nmap")
     if not binary:
         return [], "nmap"
-    cmd = [binary, "-sV", "-Pn", "--top-ports", "1000", "-T4", "-oX", "-", host]
+    # التقرير النصي القياسي فقط: لا XML ولا تحليل مسند — سهل القراءة
+    # وبلا سطح حقن على الإطلاق.
+    cmd = [binary, "-sV", "-Pn", "--top-ports", "1000", "-T4", "-oN", "-", host]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (subprocess.SubprocessError, OSError):
         return [], "nmap"
     if not proc.stdout.strip():
         return [], "nmap"
-    try:
-        root = ET.fromstring(proc.stdout)
-    except ET.ParseError:
-        return [], "nmap"
 
     findings: List[Finding] = []
-    for host_node in root.findall("host"):
-        addr = host_node.find("address")
-        name = addr.get("addr", host) if addr is not None else host
-        ports = host_node.find("ports")
-        if ports is None:
+    name = host
+    for raw in proc.stdout.splitlines():
+        line = raw.rstrip()
+        report = _REPORT_LINE.match(line)
+        if report:
+            name = report.group(1) or host
             continue
-        for p in ports.findall("port"):
-            state = p.find("state")
-            if state is None or state.get("state") != "open":
-                continue
-            port_id = int(p.get("portid", 0))
-            proto = p.get("protocol", "tcp")
-            svc = p.find("service")
-            service = svc.get("name", "") if svc is not None else ""
-            product = (svc.get("product", "") if svc is not None else "") or ""
-            version = (svc.get("version", "") if svc is not None else "") or ""
-            banner = " ".join(x for x in (service, product, version) if x)
-            note = SENSITIVE.get(port_id)
-            findings.append(Finding(
-                rule_id=f"PORT-OPEN-{port_id}",
-                title=f"منفذ {port_id}/{proto} مفتوح — {banner or 'خدمة مفتوحة'}",
-                severity="high" if note else ("medium" if port_id in TOP_PORTS else "info"),
-                category="ports",
-                location=f"{name}:{port_id}",
-                evidence=banner,
-                owasp="A05:2021 – Security Misconfiguration",
-                remediation=note or "أغلق المنفذ إن لم يكن مطلوباً، أو احجبه بجدار حماية.",
-            ))
+        m = _PORT_LINE.match(line.strip())
+        if not m:
+            continue
+        port_id, proto, _state, service, rest = m.groups()
+        port_id = int(port_id)
+        banner = " ".join(x for x in (service, rest.strip()) if x)
+        note = SENSITIVE.get(port_id)
+        findings.append(Finding(
+            rule_id=f"PORT-OPEN-{port_id}",
+            title=f"منفذ {port_id}/{proto} مفتوح — {banner or 'خدمة مفتوحة'}",
+            severity="high" if note else ("medium" if port_id in TOP_PORTS else "info"),
+            category="ports",
+            location=f"{name}:{port_id}",
+            evidence=banner,
+            owasp="A05:2021 – Security Misconfiguration",
+            remediation=note or "أغلق المنفذ إن لم يكن مطلوباً، أو احجبه بجدار حماية.",
+        ))
     return findings, "nmap"
 
 

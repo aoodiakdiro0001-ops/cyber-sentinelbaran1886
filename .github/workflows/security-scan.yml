@@ -1,0 +1,153 @@
+name: 🛡️ Security Scan (scheduled + manual)
+
+on:
+  schedule:
+    - cron: '17 3 * * *'   # يومياً 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'الهدف: رابط، مضيف، أو مسار مجلد الكود'
+        required: false
+        default: ''
+      mode:
+        description: 'نطاق الفحص'
+        type: choice
+        options: [all, source, web, ports]
+        default: all
+  push:
+    branches: [main, master]
+    paths-ignore: ['**/*.md', 'reports/**']
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    name: فحص أمني
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache security tooling
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/nuclei
+            ~/.cache/pip
+          key: sentinel-tools-${{ runner.os }}-v1
+
+      - name: Install free scanners (best effort)
+        run: |
+          set -uo pipefail
+          pip install --upgrade pip -q
+          pip install semgrep -q || echo "::warning::semgrep غير متاح لهذه الجولة"
+          if ! command -v nuclei >/dev/null 2>&1; then
+            curl -sL https://github.com/projectdiscovery/nuclei/releases/download/v3.3.7/nuclei_3.3.7_linux_amd64.zip -o /tmp/nuclei.zip || true
+            if [ -s /tmp/nuclei.zip ]; then
+              sudo unzip -o /tmp/nuclei.zip -d /usr/local/bin >/dev/null 2>&1 && chmod +x /usr/local/bin/nuclei || true
+            fi
+          fi
+          nuclei -version 2>/dev/null || echo "::warning::nuclei غير متاح لهذه الجولة (سيرتكب الفحص للمستودع)"
+
+      - name: Environment probe
+        run: python3 -m sentinel doctor || true
+
+      - name: Run scan
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          INPUT_TARGET: ${{ github.event.inputs.target }}
+          INPUT_MODE: ${{ github.event.inputs.mode || 'all' }}
+        run: |
+          set -uo pipefail
+          MODE="${INPUT_MODE:-all}"
+          STATUS=0
+          if [ -n "${INPUT_TARGET:-}" ]; then
+            python3 -m sentinel scan --target "$INPUT_TARGET" --mode "$MODE" --out reports --no-nuclei || STATUS=$?
+          else
+            REPO_URL="https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY#*/}"
+            python3 -m sentinel scan --target "$REPO_URL" --mode "$MODE" --out reports --no-nuclei || STATUS=$?
+          fi
+          if [ ! -f reports/report.json ]; then
+            python3 -m sentinel scan --target . --mode source --out reports --no-nuclei || STATUS=$?
+          fi
+          echo "scan status: $STATUS"
+          exit 0
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-report-${{ github.run_number }}
+          path: |
+            reports/report.html
+            reports/report.json
+          retention-days: 30
+
+      - name: Build step summary + fail on critical/high
+        run: |
+          python3 -c "
+          import json, os, pathlib, sys
+          p = pathlib.Path('reports/report.json')
+          if not p.is_file():
+              print('لا يوجد تقرير'); sys.exit(0)
+          r = json.loads(p.read_text(encoding='utf-8'))
+          c = r.get('counts', {})
+          lines = ['## 🛡️ Security scan — ' + str(r.get('target','')),
+                   '',
+                   '**Score:** ' + str(r.get('score')) + '/100 · **Grade:** ' + str(r.get('grade')) +
+                   ' · **AI:** ' + str(r.get('ai_provider','off')),
+                   '',
+                   '| حرجة | عالية | متوسطة | منخفضة | معلوماتية |',
+                   '|---|---|---|---|---|',
+                   '| {} | {} | {} | {} | {} |'.format(c.get('critical',0), c.get('high',0), c.get('medium',0), c.get('low',0), c.get('info',0))]
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              open(summary, 'a', encoding='utf-8').write('\n'.join(lines) + '\n')
+          bad = [f for f in r.get('findings', []) if f.get('severity') in ('critical','high')]
+          if bad:
+              print('ثغرات حرجة/عالية:', len(bad))
+              for f in bad[:20]:
+                  print('-', f.get('severity'), '|', f.get('title'), '|', f.get('location'))
+              sys.exit(1)
+          print('لا توجد ثغرات حرجة أو عالية ✔')
+          "
+
+      - name: Open issue on critical findings
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '🛡️ **Cyber-SentinelBaran1886** — رصدت الجولة المجدولة ثغرات حرجة/عالية.\n\n';
+            try {
+              const r = JSON.parse(fs.readFileSync('reports/report.json', 'utf8'));
+              const bad = (r.findings || []).filter(f => ['critical','high'].includes(f.severity)).slice(0, 25);
+              body += `**الهدف:** ${r.target}\n\n**الدرجة:** ${r.score}/100 (${r.grade})\n\n`;
+              body += bad.map(f => `- **${f.severity.toUpperCase()}** ${f.title}\n  - \`${f.location}\`\n  - ${f.remediation}`).join('\n');
+              body += '\n\n> التقرير الكامل مرفوع كـ artifact في هذه العملية.';
+            } catch (e) {
+              body += 'تعذّر قراءة التقرير — راجع الـ artifacts.';
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 نتيجة فحص أمني ${new Date().toISOString().slice(0,10)}`,
+              body
+            });

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyber-sentinelbaran1886"
+version = "1.0.0"
+description = "Cyber-SentinelBaran1886 — autonomous pentesting & vulnerability scanner on 100% free tiers (SAST + Nuclei/Nmap + AI triage + Supabase + Telegram)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Baran Avisat" }]
+keywords = ["security", "scanner", "sast", "owasp", "nuclei", "pentesting", "free-tier"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+
+[project.scripts]
+sentinel = "sentinel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/aoodiakdiro0001-ops/cyber-sentinelbaran1886"
+Support = "https://baranavi.gumroad.com/"
+
+[tool.setuptools]
+packages = ["sentinel"]

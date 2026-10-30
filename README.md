@@ -213,6 +213,7 @@ cyber-sentinelbaran1886/
 - **البريد:** baranavisat@gmail.com
 - **الهاتف / واتساب:** +90 531 326 3722
 - **المتجر الرسمي:** https://baranavi.gumroad.com/
+- **صفحة هذا المنتج:** https://baranavi.gumroad.com/l/cyber-sentinelbaran1886
 - التفاصيل الكاملة وطرق الدفع في [SUPPORT.md](SUPPORT.md)
 
 ## 📜 الترخيص

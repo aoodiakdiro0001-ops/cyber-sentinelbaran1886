@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .config import ignore_rules, is_ignored
 from .models import Finding
 from .redact import redact
 
@@ -149,13 +150,17 @@ def scan_source(path: str, max_findings: int = 400) -> List[Finding]:
         files = list(_iter_files(root))
         base = root
 
+    ignore = ignore_rules(base)
+
     for f in files:
+        rel = str(f.relative_to(base)) if str(f).startswith(str(base)) else str(f)
+        if is_ignored(rel, ignore):
+            continue
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         lines = text.splitlines()
-        rel = str(f.relative_to(base)) if str(f).startswith(str(base)) else str(f)
         for rule_id, severity, title, owasp, remediation, rx in RULES:
             for idx, line in enumerate(lines, start=1):
                 if len(line) > 4000:

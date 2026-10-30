@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import List
 
+from .config import ignore_rules, is_ignored
 from .models import Finding
 from .redact import PATTERNS, redact
 
@@ -32,6 +33,7 @@ def scan_paths(paths: List[str]) -> List[Finding]:
         root = Path(raw)
         if not root.exists():
             continue
+        ignore = ignore_rules(root if root.is_dir() else root.parent)
         candidates = [root] if root.is_file() else [
             p for p in root.rglob("*")
             if p.is_file()
@@ -39,13 +41,15 @@ def scan_paths(paths: List[str]) -> List[Finding]:
             and (p.suffix.lower() in SCAN_EXT or p.name in NAMES or p.name.startswith(".env"))
         ]
         for f in candidates[:2000]:
+            rel = _rel(f, root)
+            if is_ignored(rel, ignore):
+                continue
             try:
                 if f.is_file() and f.stat().st_size > MAX_BYTES:
                     continue
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            rel = _rel(f, root)
             for label, rx in PATTERNS:
                 for idx, line in enumerate(text.splitlines(), start=1):
                     if len(line) > 2000:

@@ -81,8 +81,8 @@ jobs:
           if [ -n "${INPUT_TARGET:-}" ]; then
             python3 -m sentinel scan --target "$INPUT_TARGET" --mode "$MODE" --out reports --no-nuclei || STATUS=$?
           else
-            REPO_URL="https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY#*/}"
-            python3 -m sentinel scan --target "$REPO_URL" --mode "$MODE" --out reports --no-nuclei || STATUS=$?
+            # الهدف الافتراضي: مصدر المستودع ذاته (لا يفترض وجود موقع منشور)
+            python3 -m sentinel scan --target . --mode source --out reports --no-nuclei || STATUS=$?
           fi
           if [ ! -f reports/report.json ]; then
             python3 -m sentinel scan --target . --mode source --out reports --no-nuclei || STATUS=$?

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Keys the user must fill in .env — every one of them has a free tier.
 OPTIONAL_KEYS = [
@@ -52,6 +53,34 @@ def load_dotenv(path: str = ".env") -> Dict[str, str]:
 
 def get(key: str, default: str = "") -> str:
     return os.environ.get(key, default) or default
+
+
+def ignore_rules(root) -> List[str]:
+    """اقرأ `.sentinelignore` من جذر الفحص: سطر واحد لكل نمط و`#` للتعليق.
+
+    النمط إمّا glob (`*.pem`, `migrations/*`) أو مقطع مسار حرفي
+    (`sentinel/sast.py`) — يُستعمل لاستثناء ملفات تعريف القواعد نفسها
+    أو ملفات لا يصحّ فحص ذاتي لها.
+    """
+    p = Path(root) / ".sentinelignore"
+    if not p.is_file():
+        return []
+    rules: List[str] = []
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            rules.append(line)
+    return rules
+
+
+def is_ignored(rel: str, rules: List[str]) -> bool:
+    rel = rel.replace(os.sep, "/")
+    return any(fnmatch(rel, rule) or rule.rstrip("/") in rel for rule in rules)
+
 
 
 def has(key: str) -> bool:
